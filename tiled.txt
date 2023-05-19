@@ -1,0 +1,82 @@
+#include <cuda.h>
+#include <stdio.h>
+
+#define TILE_SIZE 16
+
+__global__ void matrixMultiplicationTiled(float* A, float* B, float* C, int M, int N, int K) {
+    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
+
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    float sum = 0.0f;
+    for (int tileIdx = 0; tileIdx < K / TILE_SIZE; ++tileIdx) {
+        tileA[threadIdx.y][threadIdx.x] = A[row * K + tileIdx * TILE_SIZE + threadIdx.x];
+        tileB[threadIdx.y][threadIdx.x] = B[(tileIdx * TILE_SIZE + threadIdx.y) * N + col];
+
+        __syncthreads();
+
+        for (int k = 0; k < TILE_SIZE; ++k) {
+            sum += tileA[threadIdx.y][k] * tileB[k][threadIdx.x];
+        }
+
+        __syncthreads();
+    }
+
+    C[row * N + col] = sum;
+}
+
+int main() {
+    int M = 1024;
+    int N = 1024;
+    int K = 1024;
+
+    float *h_A, *h_B, *h_C;
+    float *d_A, *d_B, *d_C;
+
+    size_t size = M * K * sizeof(float);
+
+    h_A = (float*)malloc(size);
+    h_B = (float*)malloc(size);
+    h_C = (float*)malloc(M * N * sizeof(float));
+
+    cudaMalloc(&d_A, size);
+    cudaMalloc(&d_B, size);
+    cudaMalloc(&d_C, M * N * sizeof(float));
+
+    // Initialize input matrices A and B
+    for (int i = 0; i < M * K; ++i) {
+        h_A[i] = 1.0f;
+    }
+    for (int i = 0; i < K * N; ++i) {
+        h_B[i] = 2.0f;
+    }
+
+    cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
+
+    dim3 blockDim(16, 16);
+    dim3 gridDim((N + blockDim.x - 1) / blockDim.x, (M + blockDim.y - 1) / blockDim.y);
+
+    matrixMultiplicationTiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
+
+    cudaMemcpy(h_C, d_C, M * N * sizeof(float), cudaMemcpyDeviceToHost);
+
+    // Print the resulting matrix C
+    for (int i = 0; i < M * N; ++i) {
+        printf("%f ", h_C[i]);
+        if ((i + 1) % N == 0) {
+            printf("\n");
+        }
+    }
+
+    free(h_A);
+    free(h_B);
+    free(h_C);
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    return 0;
+}
